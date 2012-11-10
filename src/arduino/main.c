@@ -9,22 +9,23 @@ static inline void spi_setup_master(void)
 {
   /* doc8161.pdf, ch.18 */
 
+  /* ss is used by avr spi to determine master */
+  /* set output mode even if pb2 not used by us */
+  DDRB |= (1 << 2);
+
   /* spi output pins: sck pb5, mosi pb3 */
   DDRB |= (1 << 5) | (1 << 3);
-  PORTB &= ~((1 << 5) | (1 << 3));
 
-#if 0
   /* spi input pins: miso pb4 */
   DDRB &= ~(1 << 4);
   /* disable pullup (already by default) */
   PORTB &= ~(1 << 4);
-#endif
-
-  /* clear double speed */
-  SPSR &= ~(1 << SPI2X);
 
   /* enable spi, msb first, master, freq / 128 (125khz), sck low idle */
   SPCR = (1 << SPE) | (1 << MSTR) | (3 << SPR0) | (1 << CPOL);
+
+  /* clear double speed */
+  SPSR &= ~(1 << SPI2X);
 }
 
 static inline void spi_set_sck_freq(uint8_t x)
@@ -86,7 +87,7 @@ static void spi_write_uint16(uint16_t x)
 
 static inline void dac7554_sync_low(void)
 {
-#define DAC7554_SYNC_MASK (1 << 0)
+#define DAC7554_SYNC_MASK (1 << 2)
   PORTB &= ~DAC7554_SYNC_MASK;
 }
 
@@ -95,25 +96,17 @@ static inline void dac7554_sync_high(void)
   PORTB |= DAC7554_SYNC_MASK;
 }
 
-static void dac7554_delay(void)
-{
-  volatile unsigned int i;
-  for (i = 0; i < 1000; ++i) __asm__ __volatile__("nop");
-}
-
-static void dac7554_init(void)
+static void dac7554_setup(void)
 {
   /* sync pin controled with PB0, 8 */
   DDRB |= DAC7554_SYNC_MASK;
   dac7554_sync_high();
-
-  /* assume: sclk <= 50mhz */
-  spi_setup_master();
-  spi_set_sck_freq(SPI_SCK_FREQ_FOSC2);
 }
 
 static inline void dac7554_write(uint16_t data, uint16_t chan)
 {
+  /* assume spi initialized */
+
   /* refer to SLAS399A, p.14 table.1 for commands */
 
   /* assume: 0 <= data < 4096 */
@@ -145,12 +138,16 @@ static inline void dac7554_write(uint16_t data, uint16_t chan)
 
 int main(void)
 {
-  dac7554_init();
+  /* assume: sclk <= 50mhz */
+  spi_setup_master();
+  spi_set_sck_freq(SPI_SCK_FREQ_FOSC2);
+
+  dac7554_setup();
 
   while (1)
   {
-    dac7554_write(4096 / 2, 1);
-    dac7554_write(4096 / 8, 1);
+    dac7554_write(4096 / 2, 0);
+    dac7554_write(4096 / 8, 0);
   }
 
   return 0;

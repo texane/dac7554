@@ -87,7 +87,7 @@ static void spi_write_uint16(uint16_t x)
 
 static inline void dac7554_sync_low(void)
 {
-#define DAC7554_SYNC_MASK (1 << 2)
+#define DAC7554_SYNC_MASK (1 << 0)
   PORTB &= ~DAC7554_SYNC_MASK;
 }
 
@@ -146,8 +146,14 @@ int main(void)
 
   while (1)
   {
+    /* warning: must be le 0xfff */
+    dac7554_write(4096 / 1 - 1, 0);
     dac7554_write(4096 / 2, 0);
+    dac7554_write(4096 / 4, 0);
     dac7554_write(4096 / 8, 0);
+    dac7554_write(4096 / 16, 0);
+    dac7554_write(4096 / 32, 0);
+    dac7554_write(4096 / 64, 0);
   }
 
   return 0;

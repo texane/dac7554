@@ -1,33 +1,78 @@
 #include <stdint.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <util/delay.h>
 
 
 /* SPI module */
 
-void spi_init_master(void)
+static inline void spi_setup_master(void)
 {
-  /* arduino SPI is routed as following
-     MOSI, PB3, 11
-     SLCK, PB5, 13
-   */
+  /* doc8161.pdf, ch.18 */
 
-  /* set MOSI and SCK output, all others input */
-  DDRB |= (1 << 3) | (1 << 5);
+  /* spi output pins: sck pb5, mosi pb3 */
+  DDRB |= (1 << 5) | (1 << 3);
 
-  /* enable SPI, Master, set clock rate fck / 2 = 8mhz */
-  SPCR = (1 << SPE) | (1 << MSTR) | (4 << SPR0);
+  /* spi input pins: miso pb4 */
+  DDRB &= ~(1 << 4);
+  /* disable pullup (already by default) */
+  PORTB &= ~(1 << 4);
+
+  /* clear double speed */
+  SPSR &= ~(1 << SPI2X);
+
+  /* enable spi, msb first, master, freq / 128 (125khz), sck low idle */
+  SPCR = (1 << SPE) | (1 << MSTR) | (3 << SPR0) | (1 << CPOL);
+}
+
+static inline void spi_set_sck_freq(uint8_t x)
+{
+  /* x one of SPI_SCK_FREQ_FOSCX */
+  /* where spi sck = fosc / X */
+  /* see atmega328 specs, table 18.5 */
+#define SPI_SCK_FREQ_FOSC2 ((1 << 2) | 0)
+#define SPI_SCK_FREQ_FOSC4 ((0 << 2) | 0)
+#define SPI_SCK_FREQ_FOSC8 ((1 << 2) | 1)
+#define SPI_SCK_FREQ_FOSC16 ((0 << 2) | 1)
+#define SPI_SCK_FREQ_FOSC32 ((1 << 2) | 2)
+#define SPI_SCK_FREQ_FOSC64 ((0 << 2) | 2)
+#define SPI_SCK_FREQ_FOSC128 ((0 << 2) | 3)
+
+  SPCR &= ~(3 << SPR0);
+  SPCR |= (x & 3) << SPR0;
+
+  SPSR &= ~(1 << SPI2X);
+  SPSR |= (((x >> 2) & 1) << SPI2X);
 }
 
 static inline void spi_write_uint8(uint8_t x)
 {
-  /* start transmission and wait for completion */
+  /* write the byte and wait for transmission */
+
+#if 1 /* FIXME: needed for sd_read_block to work */
+  __asm__ __volatile__ ("nop\n\t");
+  __asm__ __volatile__ ("nop\n\t");
+#endif
+
   SPDR = x;
+
+#if 0
+  if (SPSR & (1 << WCOL))
+  {
+#if 1
+    PRINT_FAIL();
+#else
+    /* access SPDR */
+    volatile uint8_t fubar = SPDR;
+    __asm__ __volatile__ ("" :"=m"(fubar));
+    goto redo;
+#endif
+  }
+#endif
+
   while ((SPSR & (1 << SPIF)) == 0) ;
 }
 
-static inline void spi_write_uint16(uint16_t x)
+static void spi_write_uint16(uint16_t x)
 {
   spi_write_uint8((x >> 8) & 0xff);
   spi_write_uint8((x >> 0) & 0xff);
@@ -35,6 +80,17 @@ static inline void spi_write_uint16(uint16_t x)
 
 
 /* reference: SLAS399A.pdf */
+
+static inline void dac7554_sync_low(void)
+{
+#define DAC7554_SYNC_MASK (1 << 0)
+  PORTB &= ~DAC7554_SYNC_MASK;
+}
+
+static inline void dac7554_sync_high(void)
+{
+  PORTB |= DAC7554_SYNC_MASK;
+}
 
 static void dac7554_delay(void)
 {
@@ -44,12 +100,13 @@ static void dac7554_delay(void)
 
 static void dac7554_init(void)
 {
-  /* assume: sclk <= 50mhz */
-  spi_init_master();
-
   /* sync pin controled with PB0, 8 */
-  DDRB |= (1 << 0);
-  PORTB &= ~(1 << 0);
+  DDRB |= DAC7554_SYNC_MASK;
+  dac7554_sync_high();
+
+  /* assume: sclk <= 50mhz */
+  spi_setup_master();
+  spi_set_sck_freq(SPI_SCK_FREQ_FOSC2);
 }
 
 static inline void dac7554_write(uint16_t data, uint16_t chan)
@@ -62,17 +119,22 @@ static inline void dac7554_write(uint16_t data, uint16_t chan)
   /* 2 to update both input and DAC registers */  
   const uint16_t cmd = (2 << 14) | (chan << 12) | data;
 
-  /* set SYNC low */
-  PORTB &= ~(1 << 0);
+  /* pulse sync */
+  dac7554_sync_high();
+  __asm__ __volatile__ ("nop");
+  __asm__ __volatile__ ("nop");
+  dac7554_sync_low();
 
   /* wait for SCLK falling edge setup time, 4ns */
+  __asm__ __volatile__ ("nop");
   __asm__ __volatile__ ("nop");
 
   spi_write_uint16(cmd);
 
   /* wait for SLCK to rise (0 ns) and set high */
   __asm__ __volatile__ ("nop");
-  PORTB |= 1 << 0;
+  __asm__ __volatile__ ("nop");
+  dac7554_sync_high();
 }
 
 
@@ -81,9 +143,12 @@ static inline void dac7554_write(uint16_t data, uint16_t chan)
 int main(void)
 {
   dac7554_init();
-  dac7554_write(4096 / 2, 0);
-  dac7554_write(4096 / 4, 1);
-  dac7554_write(4096 / 8, 2);
-  while (1) ;
+
+  while (1)
+  {
+    dac7554_write(4096 / 2, 0);
+    dac7554_write(4096 / 4, 0);
+  }
+
   return 0;
 }

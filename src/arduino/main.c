@@ -11,11 +11,14 @@ static inline void spi_setup_master(void)
 
   /* spi output pins: sck pb5, mosi pb3 */
   DDRB |= (1 << 5) | (1 << 3);
+  PORTB &= ~((1 << 5) | (1 << 3));
 
+#if 0
   /* spi input pins: miso pb4 */
   DDRB &= ~(1 << 4);
   /* disable pullup (already by default) */
   PORTB &= ~(1 << 4);
+#endif
 
   /* clear double speed */
   SPSR &= ~(1 << SPI2X);
@@ -146,8 +149,8 @@ int main(void)
 
   while (1)
   {
-    dac7554_write(4096 / 2, 0);
-    dac7554_write(4096 / 4, 0);
+    dac7554_write(4096 / 2, 1);
+    dac7554_write(4096 / 8, 1);
   }
 
   return 0;
